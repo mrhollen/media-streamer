@@ -1,0 +1,33 @@
+name: media_streamer_client
+description: "Mobile client for the Media Streamer server."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.11.0-30.0.dev
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  # HTTP requests to the media server
+  http: ^1.2.0
+  # WebSocket streaming
+  web_socket_channel: ^3.0.0
+  # Local storage for saved servers
+  shared_preferences: ^2.2.0
+  # QR code scanning
+  mobile_scanner: ^5.0.0
+  # UUID generation
+  uuid: ^4.3.0
+  # State management
+  provider: ^6.1.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
