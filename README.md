@@ -4,13 +4,15 @@ Media Streamer is a lightweight Go server that turns local audio/video devices i
 
 ## Features
 - Stream audio or video from multiple devices concurrently using ffmpeg.
+- Auto-detect available audio and video devices and generate a config file with `--detect`.
 - Discover available devices over HTTPS and stream over secure WebSockets.
 - Single PSK authentication for both REST and WebSocket flows, with optional QR code export.
 - Optional TLS support with certificate fingerprinting for easy client verification.
 
 ## Prerequisites
-- Go 1.25 or newer (`go version` should report ≥ 1.25).
+- Go 1.25 or newer (`go version` should report ≥ 1.25).
 - ffmpeg installed and available on your `PATH`.
+- For device auto-detection: `v4l2-ctl` (from `v4l-utils`), `pactl` (PulseAudio/PipeWire), or `aplay` (ALSA). These are optional — without them, `--detect` will skip the corresponding device type with a warning.
 - Access to the audio/video devices you plan to expose (Linux device files such as `/dev/video0`, PipeWire/PulseAudio monitors, etc.).
 - Optional: TLS certificate and key (PEM files) if you want encrypted transport.
 
@@ -44,6 +46,24 @@ Each device entry tells ffmpeg how to capture and encode a stream:
 - `ffmpeg_input`, `ffmpeg_args`, `output_codec`, and `output_args` map directly to ffmpeg command-line flags.
 - Valid `type` values are `"video"` and `"audio"`; these control whether ffmpeg uses `-c:v` or `-c:a`.
 
+### 2a. Auto-detect devices (alternative to manual configuration)
+Instead of writing `config.json` by hand, you can let the server discover your devices automatically:
+
+```bash
+./mediastreamer --detect
+```
+
+This runs system probes (`v4l2-ctl` for video, `pactl` or `aplay` for audio) and writes a ready-to-use `config.json` with sensible defaults. The generated config is also printed to stdout.
+
+To write the config to a specific path:
+```bash
+./mediastreamer --detect --config my-config.json
+```
+
+The detect mode does **not** start the server — it only generates the configuration file. Review the output, tweak any settings you like, then start the server normally.
+
+If a detection tool is missing (e.g., no webcam for `v4l2-ctl`), a warning is printed on stderr and detection continues with the remaining device types.
+
 ### 3. Run the server
 ```bash
 go run ./cmd/mediastreamer \
@@ -61,14 +81,14 @@ The server prints a fresh PSK and renders a QR code in the terminal. Keep this k
 
 ### 4. Talk to the API
 1. Request the device catalog (replace `YOUR_PSK` with the value printed at startup):
-   ```bash
-   curl -H "Authorization: Bearer YOUR_PSK" http://localhost:8080/devices
-   ```
+    ```bash
+    curl -H "Authorization: Bearer YOUR_PSK" http://localhost:8080/devices
+    ```
 2. Connect a WebSocket client such as `wscat` or a browser. The first message sent on the socket must be the PSK; once accepted, binary frames start streaming the encoded data:
-   ```bash
-   wscat -c ws://localhost:8080/stream/webcam-high
-   # send: YOUR_PSK
-   ```
+    ```bash
+    wscat -c ws://localhost:8080/stream/webcam-high
+    # send: YOUR_PSK
+    ```
 
 ### 5. Build a binary (optional)
 ```bash
@@ -80,6 +100,7 @@ Run the compiled binary with the same flags described above.
 ## Command-Line Reference
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--detect` | `false` | Auto-detect devices and generate a config file (does not start the server). |
 | `--config` | `config.json` | Path to JSON config describing devices. |
 | `--host` | `0.0.0.0` | Interface to bind when `--addr` is empty. |
 | `--port` | `8080` | Port to use when `--addr` is empty. |
@@ -104,6 +125,7 @@ Start the server with `--tls-cert tls/dev.crt --tls-key tls/dev.key`. The consol
 ## Project Layout
 - `cmd/mediastreamer`: Application entry point, flag parsing, and startup wiring.
 - `internal/config`: Config parsing and validation helpers.
+- `internal/detect`: Device auto-detection using `v4l2-ctl` (video) and `pactl`/`aplay` (audio).
 - `internal/psk`: PSK generation, QR printing, and persistence utilities.
 - `internal/server`: HTTP and WebSocket handlers plus authentication checks.
 - `internal/stream`: ffmpeg runner abstraction and streaming worker.
