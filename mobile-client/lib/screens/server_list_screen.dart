@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:media_streamer_client/providers/server_provider.dart';
@@ -36,9 +38,25 @@ class _ServerListScreenState extends State<ServerListScreen> {
   /// Ping every saved server to update connection status.
   Future<void> _pingAllServers(ServerProvider provider) async {
     final servers = provider.servers;
+    if (servers.isEmpty) return;
+
+    // Set all to connecting first
     for (final server in servers) {
       provider.updateServerStatus(server.id, ServerStatus.connecting);
-      await provider.pingServer(server.id);
+    }
+
+    // Ping all servers in parallel with a total timeout
+    try {
+      await Future.wait(
+        servers.map((server) => provider.pingServer(server.id)),
+      ).timeout(const Duration(seconds: 20));
+    } on TimeoutException {
+      // Pings that haven't completed will show as offline
+      for (final server in servers) {
+        if (provider.getServerStatus(server.id) == ServerStatus.connecting) {
+          provider.updateServerStatus(server.id, ServerStatus.offline);
+        }
+      }
     }
   }
 

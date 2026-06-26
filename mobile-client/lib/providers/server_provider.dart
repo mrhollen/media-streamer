@@ -22,6 +22,7 @@ class ServerProvider extends ChangeNotifier {
   StreamConnectionState _streamState = StreamConnectionState.idle;
   StreamSession? _streamSession;
   int _bytesReceived = 0;
+  String? _streamError;
 
   // -- Per-server cached device lists --
   final Map<String, List<Device>> _deviceCache = {};
@@ -46,6 +47,7 @@ class ServerProvider extends ChangeNotifier {
   bool get hasActiveStream => _streamState == StreamConnectionState.streaming;
   int get bytesReceived => _bytesReceived;
   StreamSession? get streamSession => _streamSession;
+  String? get streamError => _streamError;
 
   /// Get the cached device list for a server.
   List<Device> getDevices(String serverId) =>
@@ -144,12 +146,15 @@ class ServerProvider extends ChangeNotifier {
         server.address,
         server.psk,
         isTls: server.isTls,
-      );
+      ).timeout(Duration(seconds: 8));
       updateServerStatus(
         serverId,
         reachable ? ServerStatus.connected : ServerStatus.offline,
       );
       return reachable;
+    } on TimeoutException {
+      updateServerStatus(serverId, ServerStatus.offline);
+      return false;
     } catch (_) {
       updateServerStatus(serverId, ServerStatus.offline);
       return false;
@@ -182,11 +187,19 @@ class ServerProvider extends ChangeNotifier {
   /// WebSocket connection should be managed by the UI layer using
   /// [StreamService], calling [onStreamData] and [onStreamError] as events
   /// occur.
-  void startStreaming(Server server, Device device) {
+  void startStreaming(Server server, Device device) async {
+    // Clean up any existing session before starting a new one
+    if (_streamSession != null) {
+      final service = StreamService();
+      await service.stopStream(_streamSession!);
+      _streamSession = null;
+    }
+
     _activeStreamServer = server;
     _activeStreamDevice = device;
     _streamState = StreamConnectionState.connecting;
     _bytesReceived = 0;
+    _streamError = null;
     notifyListeners();
   }
 
@@ -198,12 +211,17 @@ class ServerProvider extends ChangeNotifier {
   /// Called by the stream listener when binary data arrives.
   void onStreamData(List<int> data) {
     _bytesReceived += data.length;
-    _streamState = StreamConnectionState.streaming;
+    // Only transition to streaming if not in an error or disconnected state
+    if (_streamState != StreamConnectionState.error &&
+        _streamState != StreamConnectionState.disconnected) {
+      _streamState = StreamConnectionState.streaming;
+    }
     notifyListeners();
   }
 
   /// Called when a stream error occurs.
   void onStreamError(String error) {
+    _streamError = error;
     _streamState = StreamConnectionState.error;
     notifyListeners();
   }
@@ -220,6 +238,7 @@ class ServerProvider extends ChangeNotifier {
     _activeStreamDevice = null;
     _streamState = StreamConnectionState.disconnected;
     _bytesReceived = 0;
+    _streamError = null;
     notifyListeners();
   }
 
@@ -227,6 +246,14 @@ class ServerProvider extends ChangeNotifier {
   /// when StreamService emits state changes).
   void setStreamState(StreamConnectionState state) {
     _streamState = state;
+    notifyListeners();
+  }
+
+  /// Reset the stream state to idle, clearing any error.
+  /// Use this before retrying a connection to get a clean slate.
+  void resetStreamState() {
+    _streamState = StreamConnectionState.idle;
+    _streamError = null;
     notifyListeners();
   }
 

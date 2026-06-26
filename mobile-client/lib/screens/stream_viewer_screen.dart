@@ -122,7 +122,7 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
           return Stack(
             children: [
               // Center content based on state
-              _buildCenterContent(state),
+              _buildCenterContent(state, provider),
 
               // Top overlay
               _buildTopOverlay(context, provider),
@@ -140,7 +140,7 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
   // Center content (state-dependent)
   // -----------------------------------------------------------------------
 
-  Widget _buildCenterContent(StreamConnectionState state) {
+  Widget _buildCenterContent(StreamConnectionState state, ServerProvider provider) {
     switch (state) {
       case StreamConnectionState.connecting:
       case StreamConnectionState.connected:
@@ -153,11 +153,11 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
           opacityAnimation: _opacityAnimation,
         );
       case StreamConnectionState.error:
-        return const _ErrorState();
+        return _ErrorState(errorMessage: provider.streamError);
       case StreamConnectionState.disconnected:
         return const _DisconnectedState();
       case StreamConnectionState.idle:
-        return const _ConnectingState();
+        return const _IdleState();
     }
   }
 
@@ -358,6 +358,32 @@ class _ConnectingState extends StatelessWidget {
   }
 }
 
+/// Idle state shown before streaming has been initiated.
+class _IdleState extends StatelessWidget {
+  const _IdleState();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.play_circle_outline_rounded,
+            size: 64,
+            color: Colors.white38,
+          ),
+          SizedBox(height: 16),
+          Text(
+            'Tap to start streaming',
+            style: TextStyle(color: Colors.white54, fontSize: 16),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Animated visual indicator shown while the stream is active.
 class _StreamingState extends StatelessWidget {
   final Device device;
@@ -461,16 +487,17 @@ class _StreamingState extends StatelessWidget {
 
 /// Error state shown when the stream connection fails.
 class _ErrorState extends StatelessWidget {
-  const _ErrorState();
+  final String? errorMessage;
 
-  void _onRetry(BuildContext context) {
+  const _ErrorState({this.errorMessage});
+
+  void _onRetry(BuildContext context) async {
     final provider = context.read<ServerProvider>();
     final server = provider.activeStreamServer;
     final device = provider.activeStreamDevice;
-
-    if (server != null && device != null) {
-      provider.startStreaming(server, device);
-    }
+    if (server == null || device == null) return;
+    await provider.stopStreaming();
+    provider.startStreaming(server, device);
   }
 
   @override
@@ -497,6 +524,17 @@ class _ErrorState extends StatelessWidget {
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 8),
+            if (errorMessage != null && errorMessage!.isNotEmpty) ...[
+              Text(
+                errorMessage!,
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.5),
+                  fontSize: 14,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+            ],
             Text(
               'Check the server is online and try again',
               style: TextStyle(
@@ -522,6 +560,15 @@ class _ErrorState extends StatelessWidget {
 class _DisconnectedState extends StatelessWidget {
   const _DisconnectedState();
 
+  void _onRetry(BuildContext context) async {
+    final provider = context.read<ServerProvider>();
+    final server = provider.activeStreamServer;
+    final device = provider.activeStreamDevice;
+    if (server == null || device == null) return;
+    await provider.stopStreaming();
+    provider.startStreaming(server, device);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Center(
@@ -545,14 +592,25 @@ class _DisconnectedState extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 24),
-            OutlinedButton.icon(
-              onPressed: () => Navigator.of(context).pop(),
-              icon: const Icon(Icons.arrow_back_rounded),
-              label: const Text('Back'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: Colors.white,
-                side: const BorderSide(color: Colors.white38),
-              ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                FilledButton.icon(
+                  onPressed: () => _onRetry(context),
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Retry'),
+                ),
+                const SizedBox(width: 12),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).pop(),
+                  icon: const Icon(Icons.arrow_back_rounded),
+                  label: const Text('Back'),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.white,
+                    side: const BorderSide(color: Colors.white38),
+                  ),
+                ),
+              ],
             ),
           ],
         ),

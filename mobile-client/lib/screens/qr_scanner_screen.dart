@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
@@ -174,7 +175,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         address,
         psk,
         isTls: isTls,
-      );
+      ).timeout(const Duration(seconds: 15));
 
       debugPrint('[QR-Connect] Fetched ${devices.length} devices');
 
@@ -233,6 +234,14 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         setState(() {
           _showConnecting = false;
           _errorMessage = 'Server not reachable. Check network connection.';
+        });
+      }
+    } on TimeoutException {
+      debugPrint('[QR-Connect] Error: TimeoutException');
+      if (mounted) {
+        setState(() {
+          _showConnecting = false;
+          _errorMessage = 'Connection timed out. Check server address and network.';
         });
       }
     } on ApiException catch (e) {

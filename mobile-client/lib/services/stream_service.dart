@@ -26,6 +26,7 @@ class StreamHandle {
 
   StreamHandle(this.channel, this.subscription);
 
+  /// Cancel the subscription and close the channel sink.
   Future<void> dispose() async {
     await subscription.cancel();
     await channel.sink.close();
@@ -41,6 +42,7 @@ class StreamSession {
 
   void setHandle(StreamHandle handle) => _handle = handle;
 
+  /// Dispose the underlying handle and close the stream controller.
   Future<void> dispose() async {
     if (_handle != null) {
       await _handle!.dispose();
@@ -64,6 +66,9 @@ class StreamSession {
 /// 3. Server validates PSK; if invalid, closes with status 403 (PolicyViolation).
 /// 4. Subsequent frames from the server are binary (raw H.264 or Opus data).
 class StreamService {
+  static const Duration _connectionTimeout = Duration(seconds: 10);
+  static const Duration _inactivityTimeout = Duration(seconds: 15);
+
   /// Build the WebSocket URL for a given server and device.
   static String buildStreamUrl(
     String address,
@@ -95,37 +100,74 @@ class StreamService {
     onStateChanged?.call(StreamConnectionState.connecting);
 
     try {
+      // 1. Connect (returns channel synchronously, connection is async)
       final channel = WebSocketChannel.connect(Uri.parse(url));
 
-      // Send PSK as the first text frame for authentication
+      // 2. Wait for connection to establish, with timeout
+      await channel.ready.timeout(
+        _connectionTimeout,
+        onTimeout: () {
+          channel.sink.close();
+          throw Exception('Connection timed out after 10s');
+        },
+      );
+
+      // 3. Send PSK
       channel.sink.add(psk);
 
-      // Listen for incoming frames
+      // 4. Track data reception and inactivity
+      bool hasReceivedData = false;
+      Timer? inactivityTimer;
+
+      void startInactivityTimer() {
+        inactivityTimer?.cancel();
+        inactivityTimer = Timer(_inactivityTimeout, () {
+          if (!controller.isClosed) {
+            onStateChanged?.call(StreamConnectionState.error);
+            controller.addError(
+              Exception('Stream inactive — no data received for 15s'),
+            );
+          }
+        });
+      }
+
       final subscription = channel.stream.listen(
         (data) {
           if (data is List<int>) {
+            hasReceivedData = true;
             onStateChanged?.call(StreamConnectionState.streaming);
             controller.add(data);
+            startInactivityTimer();
           }
         },
         onError: (error) {
           onStateChanged?.call(StreamConnectionState.error);
-          controller.addError(error);
+          if (!controller.isClosed) {
+            controller.addError(error);
+          }
         },
         onDone: () {
-          onStateChanged?.call(StreamConnectionState.disconnected);
+          inactivityTimer?.cancel();
+          if (!hasReceivedData) {
+            onStateChanged?.call(StreamConnectionState.error);
+          } else {
+            onStateChanged?.call(StreamConnectionState.disconnected);
+          }
         },
       );
 
-      // Store the handle on the session for cleanup
       session.setHandle(StreamHandle(channel, subscription));
+      startInactivityTimer();
 
       onStateChanged?.call(StreamConnectionState.connected);
       return session;
     } catch (e) {
       onStateChanged?.call(StreamConnectionState.error);
+      if (!controller.isClosed) {
+        controller.addError(e);
+      }
       await controller.close();
-      rethrow;
+      return session;
     }
   }
 
