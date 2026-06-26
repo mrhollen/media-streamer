@@ -298,7 +298,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
       context: context,
       barrierDismissible: false,
       builder: (ctx) => _ManualEntryDialog(
-        key: _formKey,
+        formKey: _formKey,
         hostController: _hostController,
         portController: _portController,
         pskController: _pskController,
@@ -307,6 +307,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         onConnect: () async {
           debugPrint('[QR-Connect] onConnect callback triggered');
           final formState = _formKey.currentState;
+          debugPrint('[QR-Connect] Form state available: ${formState != null}');
           debugPrint('[QR-Connect] Form validation result: ${formState != null && formState.validate()}');
           if (formState == null || !formState.validate()) {
             debugPrint('[QR-Connect] Form validation FAILED, returning early');
@@ -675,6 +676,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
 
 /// Dialog for manually entering server connection details.
 class _ManualEntryDialog extends StatefulWidget {
+  final GlobalKey<FormState> formKey;
   final TextEditingController hostController;
   final TextEditingController portController;
   final TextEditingController pskController;
@@ -684,6 +686,7 @@ class _ManualEntryDialog extends StatefulWidget {
 
   const _ManualEntryDialog({
     super.key,
+    required this.formKey,
     required this.hostController,
     required this.portController,
     required this.pskController,
@@ -729,6 +732,7 @@ class _ManualEntryDialogState extends State<_ManualEntryDialog> {
     return AlertDialog(
       title: const Text('Enter Server Details'),
       content: Form(
+        key: widget.formKey,
         autovalidateMode: AutovalidateMode.disabled,
         child: SingleChildScrollView(
           child: Column(
