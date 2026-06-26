@@ -44,6 +44,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
   final _portController = TextEditingController(text: '8080');
   final _pskController = TextEditingController();
   bool _manualTls = false;
+  String? _manualTlsFingerprint;
 
   // -- Viewfinder bounds (centered 240x240 area) --
   ui.Rect? _viewfinderBounds;
@@ -115,7 +116,13 @@ class _QRScannerScreenState extends State<QRScannerScreen>
 
     // If QR only contains a PSK, prompt for manual host/port
     if (parsed.host == null) {
-      _showManualEntryDialog(psk: parsed.psk);
+      _showManualEntryDialog(
+        psk: parsed.psk,
+        host: parsed.host,
+        port: parsed.port,
+        isTls: parsed.isTls,
+        tlsFingerprint: parsed.tlsFingerprint,
+      );
       setState(() => _processing = false);
       await _controller.start();
       return;
@@ -230,11 +237,19 @@ class _QRScannerScreenState extends State<QRScannerScreen>
   // Manual Entry Dialog
   // -----------------------------------------------------------------------
 
-  void _showManualEntryDialog({String? psk}) {
+  void _showManualEntryDialog({
+    String? psk,
+    String? host,
+    int? port,
+    bool? isTls,
+    String? tlsFingerprint,
+  }) {
+    _manualTlsFingerprint = null;
     _pskController.text = psk ?? '';
-    _hostController.clear();
-    _portController.text = '8080';
-    _manualTls = false;
+    _hostController.text = host ?? '';
+    _portController.text = port != null ? '$port' : '8080';
+    _manualTls = isTls ?? false;
+    _manualTlsFingerprint = tlsFingerprint;
 
     showDialog(
       context: context,
@@ -247,7 +262,8 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         isTls: _manualTls,
         onTlsChanged: (v) => setState(() => _manualTls = v),
         onConnect: () async {
-          if (!_formKey.currentState!.validate()) return;
+          final formState = _formKey.currentState;
+          if (formState == null || !formState.validate()) return;
           Navigator.of(ctx).pop();
 
           await _connectAndAddServer(
@@ -255,6 +271,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
             port: int.tryParse(_portController.text.trim()) ?? 8080,
             psk: _pskController.text,
             isTls: _manualTls,
+            tlsFingerprint: _manualTlsFingerprint,
           );
         },
       ),
