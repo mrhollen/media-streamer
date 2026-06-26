@@ -1,0 +1,34 @@
+name: Flutter Tests
+
+on:
+  push:
+    paths:
+      - 'mobile-client/**'
+  pull_request:
+    paths:
+      - 'mobile-client/**'
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: '3.35.x'
+        working-directory: mobile-client
+
+      - name: Install dependencies
+        run: flutter pub get
+        working-directory: mobile-client
+
+      - name: Run tests
+        run: flutter test
+        working-directory: mobile-client
