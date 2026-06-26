@@ -1,5 +1,6 @@
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:provider/provider.dart';
@@ -87,6 +88,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
   // -----------------------------------------------------------------------
 
   void _onDetect(BarcodeCapture capture) {
+    debugPrint('[QR-Connect] _onDetect called | _processing=$_processing');
     if (_processing) return;
     _processing = true;
 
@@ -106,6 +108,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
     await _controller.stop();
 
     final parsed = parseQRCode(raw);
+    debugPrint('[QR-Connect] _handleQRResult | raw length=${raw.length}, hasHost=${parsed?.host != null}, hasPort=${parsed?.port != null}');
     if (parsed == null) {
       setState(() {
         _processing = false;
@@ -116,6 +119,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
 
     // If QR only contains a PSK, prompt for manual host/port
     if (parsed.host == null) {
+      debugPrint('[QR-Connect] QR has no host, showing manual entry dialog');
       _showManualEntryDialog(
         psk: parsed.psk,
         host: parsed.host,
@@ -128,6 +132,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
       return;
     }
 
+    debugPrint('[QR-Connect] QR has full data, connecting directly to ${parsed.host}:${parsed.port ?? 8080}');
     await _connectAndAddServer(
       host: parsed.host!,
       port: parsed.port ?? (parsed.isTls ? 443 : 8080),
@@ -150,6 +155,8 @@ class _QRScannerScreenState extends State<QRScannerScreen>
   }) async {
     if (!mounted) return;
 
+    debugPrint('[QR-Connect] _connectAndAddServer starting | host=$host, port=$port, isTls=$isTls, hasFingerprint=${tlsFingerprint != null}');
+
     setState(() {
       _showConnecting = true;
       _errorMessage = null;
@@ -161,12 +168,15 @@ class _QRScannerScreenState extends State<QRScannerScreen>
     final serverName = host;
 
     try {
+      debugPrint('[QR-Connect] Fetching devices from $address...');
       // Fetch devices to validate the connection
       final devices = await _api.fetchDevices(
         address,
         psk,
         isTls: isTls,
       );
+
+      debugPrint('[QR-Connect] Fetched ${devices.length} devices');
 
       final server = Server(
         id: const Uuid().v4(),
@@ -182,7 +192,9 @@ class _QRScannerScreenState extends State<QRScannerScreen>
 
       if (!mounted) return;
 
+      debugPrint('[QR-Connect] Adding server to provider | mounted=$mounted');
       Provider.of<ServerProvider>(context, listen: false).addServer(server);
+      debugPrint('[QR-Connect] Server added, showing success overlay');
 
       setState(() {
         _showConnecting = false;
@@ -191,6 +203,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
 
       // Navigate back after a short delay
       await Future.delayed(const Duration(milliseconds: 1200));
+      debugPrint('[QR-Connect] Success delay complete, attempting navigation | mounted=$mounted, canPop=${Navigator.of(context).canPop()}');
       try {
         if (mounted && Navigator.of(context).canPop()) {
           Navigator.of(context).pop();
@@ -199,6 +212,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         // Navigation failed, ignore
       }
     } on InvalidPSKException {
+      debugPrint('[QR-Connect] Error: InvalidPSKException');
       if (mounted) {
         setState(() {
           _showConnecting = false;
@@ -206,6 +220,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         });
       }
     } on ConnectionTimeoutException {
+      debugPrint('[QR-Connect] Error: ConnectionTimeoutException');
       if (mounted) {
         setState(() {
           _showConnecting = false;
@@ -213,6 +228,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         });
       }
     } on NetworkException {
+      debugPrint('[QR-Connect] Error: NetworkException');
       if (mounted) {
         setState(() {
           _showConnecting = false;
@@ -220,13 +236,16 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         });
       }
     } on ApiException catch (e) {
+      debugPrint('[QR-Connect] Error: ApiException -> ${e.message}');
       if (mounted) {
         setState(() {
           _showConnecting = false;
           _errorMessage = 'Connection failed: ${e.message}';
         });
       }
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[QR-Connect] Error: Unexpected -> $e');
+      debugPrint('[QR-Connect] Stack: $stackTrace');
       if (mounted) {
         setState(() {
           _showConnecting = false;
@@ -234,6 +253,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         });
       }
     } finally {
+      debugPrint('[QR-Connect] Finally block | mounted=$mounted');
       if (mounted) {
         setState(() {
           _showConnecting = false;
@@ -264,12 +284,15 @@ class _QRScannerScreenState extends State<QRScannerScreen>
     bool? isTls,
     String? tlsFingerprint,
   }) {
+    debugPrint('[QR-Connect] _showManualEntryDialog called | psk=${psk != null}, host=${host ?? "null"}, port=${port ?? "null"}, isTls=${isTls ?? false}, tlsFingerprint=${tlsFingerprint != null}');
     _manualTlsFingerprint = null;
     _pskController.text = psk ?? '';
     _hostController.text = host ?? '';
     _portController.text = port != null ? '$port' : '8080';
     _manualTls = isTls ?? false;
     _manualTlsFingerprint = tlsFingerprint;
+
+    debugPrint('[QR-Connect] Controllers pre-filled | host="${_hostController.text}", port="${_portController.text}", psk="${_pskController.text.isNotEmpty ? "***" : ""}", tls=$_manualTls');
 
     showDialog(
       context: context,
@@ -282,14 +305,24 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         isTls: _manualTls,
         onTlsChanged: (v) => setState(() => _manualTls = v),
         onConnect: () async {
+          debugPrint('[QR-Connect] onConnect callback triggered');
           final formState = _formKey.currentState;
-          if (formState == null || !formState.validate()) return;
+          debugPrint('[QR-Connect] Form validation result: ${formState != null && formState.validate()}');
+          if (formState == null || !formState.validate()) {
+            debugPrint('[QR-Connect] Form validation FAILED, returning early');
+            return;
+          }
 
           Navigator.of(ctx).pop();
+          debugPrint('[QR-Connect] Dialog popped, waiting 300ms for animation...');
           // Wait for dialog dismissal animation to complete before setState
           await Future.delayed(const Duration(milliseconds: 300));
 
-          if (!mounted) return;
+          debugPrint('[QR-Connect] Delay complete | mounted=$mounted');
+          if (!mounted) {
+            debugPrint('[QR-Connect] Widget unmounted after delay, aborting connection');
+            return;
+          }
 
           await _connectAndAddServer(
             host: _hostController.text.trim(),
