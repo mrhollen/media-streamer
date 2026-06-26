@@ -107,7 +107,13 @@ func buildFFmpegArgs(device config.Device) []string {
 	if len(device.FFmpegArgs) > 0 {
 		args = append(args, device.FFmpegArgs...)
 	}
-	args = append(args, "-i", device.FFmpegInput)
+
+	// Only add -i <FFmpegInput> if FFmpegArgs doesn't already contain -i.
+	// This guards against users who manually edit config.json and include
+	// -i in FFmpegArgs, which would produce duplicate -i flags that break ffmpeg.
+	if !hasInputFlag(device.FFmpegArgs) {
+		args = append(args, "-i", device.FFmpegInput)
+	}
 
 	if codecFlag, ok := codecFlagForType(device.Type); ok && strings.TrimSpace(device.OutputCodec) != "" {
 		args = append(args, codecFlag, device.OutputCodec)
@@ -119,6 +125,16 @@ func buildFFmpegArgs(device config.Device) []string {
 
 	args = append(args, "pipe:1")
 	return args
+}
+
+// hasInputFlag reports whether args already contains the -i flag.
+func hasInputFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "-i" {
+			return true
+		}
+	}
+	return false
 }
 
 func codecFlagForType(t config.DeviceType) (string, bool) {

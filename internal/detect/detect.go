@@ -209,8 +209,8 @@ func (d *Detector) detectPulseAudioDevices(ctx context.Context) ([]config.Device
 			ID:          fmt.Sprintf("audio-%d", src.Index),
 			Name:        src.Description,
 			Type:        config.DeviceTypeAudio,
-			FFmpegInput: "default",
-			FFmpegArgs:  []string{"-f", "pulse", "-i", src.Name},
+			FFmpegInput: src.Name,
+			FFmpegArgs:  []string{"-f", "pulse"},
 			OutputCodec: "libopus",
 			OutputArgs:  []string{"-b:a", "128k", "-f", "opus"},
 		})
