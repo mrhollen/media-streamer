@@ -11,8 +11,10 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/hollen/media-streamer/internal/config"
+	"github.com/hollen/media-streamer/internal/detect"
 	"github.com/hollen/media-streamer/internal/psk"
 	"github.com/hollen/media-streamer/internal/server"
 	"github.com/hollen/media-streamer/internal/stream"
@@ -30,6 +32,7 @@ func main() {
 		pskFile    string
 		tlsCert    string
 		tlsKey     string
+		detectMode bool
 	)
 
 	flag.StringVar(&configPath, "config", "config.json", "Path to config.json")
@@ -41,7 +44,13 @@ func main() {
 	flag.StringVar(&pskFile, "psk-file", "", "Path to a file containing the PSK (created if missing)")
 	flag.StringVar(&tlsCert, "tls-cert", "", "Path to TLS certificate file")
 	flag.StringVar(&tlsKey, "tls-key", "", "Path to TLS private key file")
+	flag.BoolVar(&detectMode, "detect", false, "Detect available devices and generate a config (does not start the server)")
 	flag.Parse()
+
+	if detectMode {
+		runDetect(configPath)
+		return
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
@@ -142,6 +151,37 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("shutdown complete")
+}
+
+func runDetect(configPath string) {
+	detector := detect.NewDetector(nil) // uses DefaultRunner
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	fmt.Println("Detecting available media devices...")
+
+	cfg, warnings, err := detector.Detect(ctx)
+	for _, w := range warnings {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+	}
+	if err != nil {
+		fatal(err)
+	}
+
+	jsonData, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		fatal(fmt.Errorf("marshal config: %w", err))
+	}
+
+	// Write to config file
+	if err := os.WriteFile(configPath, jsonData, 0o644); err != nil {
+		fatal(fmt.Errorf("write config to %s: %w", configPath, err))
+	}
+	fmt.Printf("Detected %d device(s). Config written to %s\n", len(cfg.Devices), configPath)
+
+	// Also print to stdout
+	fmt.Println()
+	fmt.Println(string(jsonData))
 }
 
 func fatal(err error) {
