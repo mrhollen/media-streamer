@@ -154,6 +154,7 @@ class _QRScannerScreenState extends State<QRScannerScreen>
       _showConnecting = true;
       _errorMessage = null;
       _showSuccess = false;
+      _processing = true;  // Prevents QR detection from triggering new dialogs
     });
 
     final address = '$host:$port';
@@ -190,36 +191,55 @@ class _QRScannerScreenState extends State<QRScannerScreen>
 
       // Navigate back after a short delay
       await Future.delayed(const Duration(milliseconds: 1200));
-      if (mounted) {
-        Navigator.of(context).pop();
+      try {
+        if (mounted && Navigator.of(context).canPop()) {
+          Navigator.of(context).pop();
+        }
+      } catch (_) {
+        // Navigation failed, ignore
       }
     } on InvalidPSKException {
-      setState(() {
-        _showConnecting = false;
-        _errorMessage = 'Invalid credentials. Check your PSK.';
-      });
+      if (mounted) {
+        setState(() {
+          _showConnecting = false;
+          _errorMessage = 'Invalid credentials. Check your PSK.';
+        });
+      }
     } on ConnectionTimeoutException {
-      setState(() {
-        _showConnecting = false;
-        _errorMessage = 'Server not reachable. Connection timed out.';
-      });
+      if (mounted) {
+        setState(() {
+          _showConnecting = false;
+          _errorMessage = 'Server not reachable. Connection timed out.';
+        });
+      }
     } on NetworkException {
-      setState(() {
-        _showConnecting = false;
-        _errorMessage = 'Server not reachable. Check network connection.';
-      });
+      if (mounted) {
+        setState(() {
+          _showConnecting = false;
+          _errorMessage = 'Server not reachable. Check network connection.';
+        });
+      }
     } on ApiException catch (e) {
-      setState(() {
-        _showConnecting = false;
-        _errorMessage = 'Connection failed: ${e.message}';
-      });
+      if (mounted) {
+        setState(() {
+          _showConnecting = false;
+          _errorMessage = 'Connection failed: ${e.message}';
+        });
+      }
     } catch (e) {
-      setState(() {
-        _showConnecting = false;
-        _errorMessage = 'Unexpected error: $e';
-      });
+      if (mounted) {
+        setState(() {
+          _showConnecting = false;
+          _errorMessage = 'Unexpected error: $e';
+        });
+      }
     } finally {
-      setState(() => _processing = false);
+      if (mounted) {
+        setState(() {
+          _showConnecting = false;
+          _processing = false;
+        });
+      }
     }
   }
 
@@ -264,7 +284,12 @@ class _QRScannerScreenState extends State<QRScannerScreen>
         onConnect: () async {
           final formState = _formKey.currentState;
           if (formState == null || !formState.validate()) return;
+
           Navigator.of(ctx).pop();
+          // Wait for dialog dismissal animation to complete before setState
+          await Future.delayed(const Duration(milliseconds: 300));
+
+          if (!mounted) return;
 
           await _connectAndAddServer(
             host: _hostController.text.trim(),
