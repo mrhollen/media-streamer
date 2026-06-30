@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 
 // ---------------------------------------------------------------------------
@@ -28,8 +29,10 @@ class StreamHandle {
 
   /// Cancel the subscription and close the channel sink.
   Future<void> dispose() async {
+    debugPrint('[${DateTime.now().toString()}] [StreamService] StreamHandle.dispose: cancelling subscription and closing channel');
     await subscription.cancel();
     await channel.sink.close();
+    debugPrint('[${DateTime.now().toString()}] [StreamService] StreamHandle.dispose: completed');
   }
 }
 
@@ -40,10 +43,14 @@ class StreamSession {
 
   StreamSession(this.controller);
 
-  void setHandle(StreamHandle handle) => _handle = handle;
+  void setHandle(StreamHandle handle) {
+    debugPrint('[${DateTime.now().toString()}] [StreamService] StreamSession.setHandle: assigning handle');
+    _handle = handle;
+  }
 
   /// Dispose the underlying handle and close the stream controller.
   Future<void> dispose() async {
+    debugPrint('[${DateTime.now().toString()}] [StreamService] StreamSession.dispose: starting (hasHandle=${_handle != null}, isControllerClosed=${controller.isClosed})');
     if (_handle != null) {
       await _handle!.dispose();
       _handle = null;
@@ -51,6 +58,7 @@ class StreamSession {
     if (!controller.isClosed) {
       await controller.close();
     }
+    debugPrint('[${DateTime.now().toString()}] [StreamService] StreamSession.dispose: completed');
   }
 }
 
@@ -69,6 +77,10 @@ class StreamService {
   static const Duration _connectionTimeout = Duration(seconds: 10);
   static const Duration _inactivityTimeout = Duration(seconds: 15);
 
+  StreamService() {
+    debugPrint('[${DateTime.now().toString()}] [StreamService] Constructor: StreamService initialised');
+  }
+
   /// Build the WebSocket URL for a given server and device.
   static String buildStreamUrl(
     String address,
@@ -77,7 +89,9 @@ class StreamService {
   }) {
     final scheme = isTls ? 'wss' : 'ws';
     final clean = address.split('://').last;
-    return '$scheme://$clean/stream/$deviceId';
+    final url = '$scheme://$clean/stream/$deviceId';
+    debugPrint('[${DateTime.now().toString()}] [StreamService] buildStreamUrl: address="$address" deviceId="$deviceId" isTls=$isTls => "$url"');
+    return url;
   }
 
   /// Start a stream and return a [StreamSession] containing the controller.
@@ -93,26 +107,35 @@ class StreamService {
     bool isTls = false,
     void Function(StreamConnectionState)? onStateChanged,
   }) async {
+    final url = buildStreamUrl(address, deviceId, isTls: isTls);
+    debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: address="$address" deviceId="$deviceId" isTls=$isTls url="$url"');
+
     final controller = StreamController<List<int>>.broadcast();
     final session = StreamSession(controller);
-    final url = buildStreamUrl(address, deviceId, isTls: isTls);
 
+    debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: notifying state change -> connecting');
     onStateChanged?.call(StreamConnectionState.connecting);
 
     try {
       // 1. Connect (returns channel synchronously, connection is async)
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: calling WebSocketChannel.connect("$url")');
       final channel = WebSocketChannel.connect(Uri.parse(url));
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: WebSocketChannel.connect returned, waiting for ready...');
 
       // 2. Wait for connection to establish, with timeout
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: awaiting channel.ready (timeout=${_connectionTimeout.inSeconds}s)');
       await channel.ready.timeout(
         _connectionTimeout,
         onTimeout: () {
+          debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: connection TIMEOUT after ${_connectionTimeout.inSeconds}s, closing channel');
           channel.sink.close();
           throw Exception('Connection timed out after 10s');
         },
       );
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: channel.ready completed — WebSocket connection established');
 
       // 3. Send PSK
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: sending PSK auth message (${psk.length} chars)');
       channel.sink.add(psk);
 
       // 4. Track data reception and inactivity
@@ -120,8 +143,10 @@ class StreamService {
       Timer? inactivityTimer;
 
       void startInactivityTimer() {
+        debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: starting inactivity timer (${_inactivityTimeout.inSeconds}s)');
         inactivityTimer?.cancel();
         inactivityTimer = Timer(_inactivityTimeout, () {
+          debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: INACTIVITY TIMEOUT — no data for ${_inactivityTimeout.inSeconds}s');
           if (!controller.isClosed) {
             onStateChanged?.call(StreamConnectionState.error);
             controller.addError(
@@ -131,48 +156,67 @@ class StreamService {
         });
       }
 
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: setting up channel.stream.listen subscription');
       final subscription = channel.stream.listen(
         (data) {
+          debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: onMessage received, type=${data.runtimeType}');
           if (data is List<int>) {
+            debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: onMessage binary data received, bytes=${data.length}');
             hasReceivedData = true;
+            debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: notifying state change -> streaming');
             onStateChanged?.call(StreamConnectionState.streaming);
             controller.add(data);
             startInactivityTimer();
+          } else {
+            debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: onMessage non-binary data, runtimeType=${data.runtimeType}, value=$data');
           }
         },
         onError: (error) {
+          debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: onError — $error');
           onStateChanged?.call(StreamConnectionState.error);
           if (!controller.isClosed) {
             controller.addError(error);
           }
         },
         onDone: () {
+          debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: onDone — stream closed by remote, hasReceivedData=$hasReceivedData');
           inactivityTimer?.cancel();
           if (!hasReceivedData) {
+            debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: onDone -> notifying state change -> error (no data ever received)');
             onStateChanged?.call(StreamConnectionState.error);
           } else {
+            debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: onDone -> notifying state change -> disconnected');
             onStateChanged?.call(StreamConnectionState.disconnected);
           }
         },
       );
 
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: setting handle on session');
       session.setHandle(StreamHandle(channel, subscription));
       startInactivityTimer();
 
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: notifying state change -> connected');
       onStateChanged?.call(StreamConnectionState.connected);
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: returning session successfully');
       return session;
-    } catch (e) {
+    } catch (e, stackTrace) {
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: EXCEPTION caught — $e');
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: stackTrace:\n$stackTrace');
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: notifying state change -> error');
       onStateChanged?.call(StreamConnectionState.error);
       if (!controller.isClosed) {
         controller.addError(e);
       }
       await controller.close();
+      debugPrint('[${DateTime.now().toString()}] [StreamService] startStream: returning session after error');
       return session;
     }
   }
 
   /// Stop an active stream and clean up resources.
   Future<void> stopStream(StreamSession session) async {
+    debugPrint('[${DateTime.now().toString()}] [StreamService] stopStream: disposing session (controllerIsClosed=${session.controller.isClosed})');
     await session.dispose();
+    debugPrint('[${DateTime.now().toString()}] [StreamService] stopStream: completed');
   }
 }

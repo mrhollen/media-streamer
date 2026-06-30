@@ -42,8 +42,10 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
   @override
   void initState() {
     super.initState();
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] initState: server="${widget.server.name}" (${widget.server.address}), device="${widget.device.name}" (${widget.device.id})');
 
     // Setup pulsing animation
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] initState: creating AnimationController');
     _animationController = AnimationController(
       duration: const Duration(milliseconds: 1500),
       vsync: this,
@@ -57,54 +59,115 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
       CurvedAnimation(parent: _animationController, curve: Curves.easeInOut),
     );
 
-    // Subscribe to stream data from the provider's session
-    _subscribeToStreamData();
+    // Actually start the WebSocket stream connection
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] initState: calling _startStreamConnection()');
+    _startStreamConnection();
+
+    // NOTE: _subscribeToStreamData() is now called inside _startStreamConnection()
+    // after the session is created, to avoid a race condition.
 
     // Start duration timer
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] initState: creating periodic timer (1s interval)');
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] timer tick: mounted=$mounted');
       if (mounted) {
         final provider = context.read<ServerProvider>();
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] timer tick: provider.streamState=${provider.streamState}');
         if (provider.streamState == StreamConnectionState.streaming ||
             provider.streamState == StreamConnectionState.connected) {
           setState(() {
             _duration += const Duration(seconds: 1);
+            debugPrint('[${DateTime.now().toString()}] [StreamViewer] timer tick: duration incremented to ${_duration.inSeconds}s');
           });
+        } else {
+          debugPrint('[${DateTime.now().toString()}] [StreamViewer] timer tick: skipping duration increment (state is ${provider.streamState})');
         }
+      } else {
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] timer tick: not mounted, skipping');
       }
     });
   }
 
-  /// Subscribe to the provider's active stream session data.
-  void _subscribeToStreamData() {
+  /// Actually initiate the WebSocket stream connection.
+  Future<void> _startStreamConnection() async {
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: ENTERING method');
     final provider = context.read<ServerProvider>();
-    final session = provider.streamSession;
-    if (session != null) {
+    final server = widget.server;
+    final device = widget.device;
+
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: server.address="${server.address}" device.id="${device.id}" isTls=${server.isTls}');
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: provider.streamState BEFORE startStream = ${provider.streamState}');
+
+    try {
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: creating StreamService instance');
+      final service = StreamService();
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: calling service.startStream(...)');
+      final session = await service.startStream(
+        server.address,
+        device.id,
+        server.psk,
+        isTls: server.isTls,
+        onStateChanged: (state) {
+          debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: onStateChanged callback fired -> $state, mounted=$mounted');
+          if (mounted) {
+            debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: calling provider.setStreamState($state)');
+            provider.setStreamState(state);
+          } else {
+            debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: NOT calling provider.setStreamState — widget not mounted');
+          }
+        },
+      );
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: service.startStream returned, session acquired');
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: calling provider.setStreamSession(session)');
+      provider.setStreamSession(session);
+
+      // Subscribe to stream data AFTER session is created
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: subscribing to session.controller.stream');
       _dataSubscription = session.controller.stream.listen(
         (data) {
+          debugPrint('[${DateTime.now().toString()}] [StreamViewer] _dataSubscription: data received, bytes=${data.length}');
           provider.onStreamData(data);
           if (mounted) {
             setState(() {
               _frameCount++;
+              debugPrint('[${DateTime.now().toString()}] [StreamViewer] _dataSubscription: frameCount incremented to $_frameCount');
             });
           }
         },
         onError: (error) {
+          debugPrint('[${DateTime.now().toString()}] [StreamViewer] _dataSubscription: onError — $error');
           provider.onStreamError(error.toString());
         },
         onDone: () {
+          debugPrint('[${DateTime.now().toString()}] [StreamViewer] _dataSubscription: onDone — stream completed');
           provider.setStreamState(StreamConnectionState.disconnected);
         },
       );
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: subscription set up successfully');
+    } catch (e, st) {
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: EXCEPTION — $e');
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: stackTrace:\n$st');
+      if (mounted) {
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: calling provider.onStreamError (mounted)');
+        provider.onStreamError(e.toString());
+      } else {
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] _startStreamConnection: NOT calling provider.onStreamError — widget not mounted');
+      }
     }
   }
 
   @override
   void dispose() {
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] dispose: starting cleanup');
     // Unsubscribe from data listener only — do NOT stop the stream
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] dispose: cancelling _dataSubscription');
     _dataSubscription?.cancel();
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] dispose: cancelling _timer');
     _timer?.cancel();
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] dispose: disposing _animationController');
     _animationController.dispose();
     super.dispose();
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] dispose: cleanup completed');
   }
 
   // -----------------------------------------------------------------------
@@ -113,11 +176,13 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
 
   @override
   Widget build(BuildContext context) {
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] build: called');
     return Scaffold(
       backgroundColor: Colors.black,
       body: Consumer<ServerProvider>(
         builder: (context, provider, _) {
           final state = provider.streamState;
+          debugPrint('[${DateTime.now().toString()}] [StreamViewer] build: Consumer builder — streamState=$state');
 
           return Stack(
             children: [
@@ -141,11 +206,14 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
   // -----------------------------------------------------------------------
 
   Widget _buildCenterContent(StreamConnectionState state, ServerProvider provider) {
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _buildCenterContent: state=$state');
     switch (state) {
       case StreamConnectionState.connecting:
       case StreamConnectionState.connected:
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] _buildCenterContent: returning _ConnectingState');
         return const _ConnectingState();
       case StreamConnectionState.streaming:
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] _buildCenterContent: returning _StreamingState');
         return _StreamingState(
           device: widget.device,
           animationController: _animationController,
@@ -153,10 +221,13 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
           opacityAnimation: _opacityAnimation,
         );
       case StreamConnectionState.error:
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] _buildCenterContent: returning _ErrorState (error="${provider.streamError}")');
         return _ErrorState(errorMessage: provider.streamError);
       case StreamConnectionState.disconnected:
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] _buildCenterContent: returning _DisconnectedState');
         return const _DisconnectedState();
       case StreamConnectionState.idle:
+        debugPrint('[${DateTime.now().toString()}] [StreamViewer] _buildCenterContent: returning _IdleState');
         return const _IdleState();
     }
   }
@@ -194,7 +265,10 @@ class _StreamViewerScreenState extends State<StreamViewerScreen>
                     Icons.arrow_back_rounded,
                     color: Colors.white,
                   ),
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () {
+                    debugPrint('[${DateTime.now().toString()}] [StreamViewer] back button pressed: navigating away with Navigator.pop()');
+                    Navigator.of(context).pop();
+                  },
                 ),
 
                 // Device name and server name
@@ -492,11 +566,18 @@ class _ErrorState extends StatelessWidget {
   const _ErrorState({this.errorMessage});
 
   void _onRetry(BuildContext context) async {
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _ErrorState._onRetry: retry button pressed');
     final provider = context.read<ServerProvider>();
     final server = provider.activeStreamServer;
     final device = provider.activeStreamDevice;
-    if (server == null || device == null) return;
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _ErrorState._onRetry: server=${server?.name} device=${device?.name}');
+    if (server == null || device == null) {
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _ErrorState._onRetry: server or device is null, aborting retry');
+      return;
+    }
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _ErrorState._onRetry: calling provider.stopStreaming()');
     await provider.stopStreaming();
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _ErrorState._onRetry: calling provider.startStreaming()');
     provider.startStreaming(server, device);
   }
 
@@ -561,11 +642,18 @@ class _DisconnectedState extends StatelessWidget {
   const _DisconnectedState();
 
   void _onRetry(BuildContext context) async {
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _DisconnectedState._onRetry: retry button pressed');
     final provider = context.read<ServerProvider>();
     final server = provider.activeStreamServer;
     final device = provider.activeStreamDevice;
-    if (server == null || device == null) return;
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _DisconnectedState._onRetry: server=${server?.name} device=${device?.name}');
+    if (server == null || device == null) {
+      debugPrint('[${DateTime.now().toString()}] [StreamViewer] _DisconnectedState._onRetry: server or device is null, aborting retry');
+      return;
+    }
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _DisconnectedState._onRetry: calling provider.stopStreaming()');
     await provider.stopStreaming();
+    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _DisconnectedState._onRetry: calling provider.startStreaming()');
     provider.startStreaming(server, device);
   }
 
@@ -602,7 +690,10 @@ class _DisconnectedState extends StatelessWidget {
                 ),
                 const SizedBox(width: 12),
                 OutlinedButton.icon(
-                  onPressed: () => Navigator.of(context).pop(),
+                  onPressed: () {
+                    debugPrint('[${DateTime.now().toString()}] [StreamViewer] _DisconnectedState: back button pressed, navigating away');
+                    Navigator.of(context).pop();
+                  },
                   icon: const Icon(Icons.arrow_back_rounded),
                   label: const Text('Back'),
                   style: OutlinedButton.styleFrom(
